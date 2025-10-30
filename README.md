@@ -58,6 +58,8 @@ gravity/
 └── docs/runbooks/             # Operational playbooks
 ```
 
-## Quick Start
+## Otel
 
 - Configure the OTel Collector with OTLP/HTTP exporters pointing to the Gravity ingest service (`POST /v1/traces` / `/v1/metrics`); the service converts spans to envelopes and pushes them onto the queue.
+
+- span spec /Users/lixin/code/temp/gateway/openinference/spec
