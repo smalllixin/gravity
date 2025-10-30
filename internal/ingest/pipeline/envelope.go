@@ -24,7 +24,15 @@ type Envelope struct {
 	Costs                Costs             `json:"costs"`
 	Pointers             Pointers          `json:"pointers"`
 	Timestamp            int64             `json:"timestamp"`
-	Attributes           map[string]string `json:"attributes,omitempty"`
+
+	// Additional attributes
+	IsStreaming  bool   `json:"is_streaming"`            // llm.is_streaming
+	ResponseID   string `json:"response_id,omitempty"`   // llm.response.id
+	RequestType  string `json:"request_type,omitempty"`  // llm.request.type
+	InputValue   string `json:"input_value,omitempty"`   // input.value
+	OutputValue  string `json:"output_value,omitempty"`  // output.value
+
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
 // Metrics holds the usage and performance metrics
@@ -33,6 +41,11 @@ type Metrics struct {
 	PromptTokens     int   `json:"prompt_tokens"`     // llm.token_count.prompt
 	CompletionTokens int   `json:"completion_tokens"` // llm.token_count.completion
 	TotalTokens      int   `json:"total_tokens"`      // llm.token_count.total
+
+	// Latency details
+	TimeToFirstTokenMs int64 `json:"time_to_first_token_ms"` // llm.latency.time_to_first_token (ms)
+	TokenGenerationMs  int64 `json:"token_generation_ms"`    // llm.latency.token_generation (ms)
+	TotalLatencyMs     int64 `json:"total_latency_ms"`       // llm.latency.total (ms)
 
 	// Prompt token details
 	CachedTokens      int `json:"cached_tokens"`       // llm.token_count.prompt_details.cache_read
@@ -134,10 +147,40 @@ func (e *Envelope) LogSummary() string {
 	sb.WriteString(fmt.Sprintf("Extracted: %d input messages, %d output messages, %d tools\n",
 		len(e.InputMessages), len(e.OutputMessages), len(e.Tools)))
 
-	// Log messages
+	// Key attributes
+	var keyAttrs []string
+	if e.IsStreaming {
+		keyAttrs = append(keyAttrs, "streaming=true")
+	}
+	if e.ResponseID != "" {
+		keyAttrs = append(keyAttrs, fmt.Sprintf("response_id=%s", e.ResponseID))
+	}
+	if e.RequestType != "" {
+		keyAttrs = append(keyAttrs, fmt.Sprintf("type=%s", e.RequestType))
+	}
+	if e.Metrics.TimeToFirstTokenMs > 0 {
+		keyAttrs = append(keyAttrs, fmt.Sprintf("ttft=%dms", e.Metrics.TimeToFirstTokenMs))
+	}
+	if e.Metrics.TokenGenerationMs > 0 {
+		keyAttrs = append(keyAttrs, fmt.Sprintf("token_gen=%dms", e.Metrics.TokenGenerationMs))
+	}
+	if e.Metrics.TotalLatencyMs > 0 {
+		keyAttrs = append(keyAttrs, fmt.Sprintf("total_latency=%dms", e.Metrics.TotalLatencyMs))
+	}
+	if len(keyAttrs) > 0 {
+		sb.WriteString(fmt.Sprintf("  Key attributes: %s\n", strings.Join(keyAttrs, ", ")))
+	}
+
+	// Log input messages
 	for i, msg := range e.InputMessages {
 		contentPreview := truncateSmart(msg.Content, 120)
 		sb.WriteString(fmt.Sprintf("  Input[%d]: role=%s content=%q\n", i, msg.Role, contentPreview))
+	}
+
+	// Log output messages
+	for i, msg := range e.OutputMessages {
+		contentPreview := truncateSmart(msg.Content, 120)
+		sb.WriteString(fmt.Sprintf("  Output[%d]: role=%s content=%q\n", i, msg.Role, contentPreview))
 	}
 
 	// Log tools

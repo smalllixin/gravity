@@ -105,9 +105,9 @@ func (h *Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	// Convert to JSON for readable logging
 	marshaler := protojson.MarshalOptions{
-		Multiline:       true,
-		Indent:          "  ",
-		EmitUnpopulated: false,
+		// Multiline:       true,
+		// Indent:          "  ",
+		// EmitUnpopulated: false,
 	}
 	jsonData, err := marshaler.Marshal(&exportReq)
 	if err != nil {

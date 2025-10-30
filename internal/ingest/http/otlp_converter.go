@@ -108,6 +108,17 @@ func (h *Handler) spanToEnvelope(orgID string, span *tracepb.Span, _ map[string]
 	reasoningTokens := getIntAttr(attrs, "llm.token_count.completion_details.reasoning", 0)
 	completionAudioTokens := getIntAttr(attrs, "llm.token_count.completion_details.audio", 0)
 
+	// Extract latency details (from seconds to milliseconds)
+	// OpenTelemetry/OpenInference use seconds as the standard unit for timing
+	timeToFirstTokenSec := getFloatAttr(attrs, "llm.latency.time_to_first_token", 0.0)
+	tokenGenerationSec := getFloatAttr(attrs, "llm.latency.token_generation", 0.0)
+	totalLatencySec := getFloatAttr(attrs, "llm.latency.total", 0.0)
+
+	// Convert to milliseconds for storage
+	timeToFirstTokenMs := int64(timeToFirstTokenSec * 1000)
+	tokenGenerationMs := int64(tokenGenerationSec * 1000)
+	totalLatencyMs := int64(totalLatencySec * 1000)
+
 	// Extract cost attributes (USD)
 	costPrompt := getFloatAttr(attrs, "llm.cost.prompt", 0.0)
 	costCompletion := getFloatAttr(attrs, "llm.cost.completion", 0.0)
@@ -131,8 +142,15 @@ func (h *Handler) spanToEnvelope(orgID string, span *tracepb.Span, _ map[string]
 	// Extract tool definitions
 	tools := extractTools(attrs)
 
+	// Extract additional attributes
+	isStreaming := getBoolAttr(attrs, "llm.is_streaming", false)
+	responseID := getStringAttr(attrs, "llm.response.id", "")
+	requestType := getStringAttr(attrs, "llm.request.type", "")
+	inputValue := getStringAttr(attrs, "input.value", "")
+	outputValue := getStringAttr(attrs, "output.value", "")
+
 	// Extract preview from input.value or first input message
-	preview := getStringAttr(attrs, "input.value", "")
+	preview := inputValue
 	if preview == "" && len(inputMessages) > 0 {
 		preview = inputMessages[0].Content
 	}
@@ -158,6 +176,9 @@ func (h *Handler) spanToEnvelope(orgID string, span *tracepb.Span, _ map[string]
 			PromptTokens:          promptTokens,
 			CompletionTokens:      completionTokens,
 			TotalTokens:           totalTokens,
+			TimeToFirstTokenMs:    timeToFirstTokenMs,
+			TokenGenerationMs:     tokenGenerationMs,
+			TotalLatencyMs:        totalLatencyMs,
 			CachedTokens:          cachedTokens,
 			CacheWriteTokens:      cacheWriteTokens,
 			PromptAudioTokens:     promptAudioTokens,
@@ -180,8 +201,13 @@ func (h *Handler) spanToEnvelope(orgID string, span *tracepb.Span, _ map[string]
 			PrefixPtr:     nil, // Will be populated by worker after processing
 			PrefixPreview: preview,
 		},
-		Timestamp:  timestamp,
-		Attributes: attrs, // Store all attributes for potential later use
+		Timestamp:   timestamp,
+		IsStreaming: isStreaming,
+		ResponseID:  responseID,
+		RequestType: requestType,
+		InputValue:  inputValue,
+		OutputValue: outputValue,
+		Attributes:  attrs, // Store all attributes for potential later use
 	}
 }
 
@@ -233,6 +259,14 @@ func getIntAttr(attrs map[string]string, key string, defaultVal int) int {
 		if _, err := fmt.Sscanf(val, "%d", &intVal); err == nil {
 			return intVal
 		}
+	}
+	return defaultVal
+}
+
+// getBoolAttr gets a boolean attribute with a fallback default
+func getBoolAttr(attrs map[string]string, key string, defaultVal bool) bool {
+	if val, ok := attrs[key]; ok {
+		return val == "true" || val == "True" || val == "1"
 	}
 	return defaultVal
 }
