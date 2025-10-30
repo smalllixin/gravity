@@ -1,6 +1,7 @@
 package http
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,16 +34,42 @@ func NewHandler(cfg *config.Config) *Handler {
 	}
 }
 
+// DecompressionMiddleware automatically decompresses request bodies based on Content-Encoding header
+// This middleware wraps handlers and transparently handles gzip-encoded requests
+func DecompressionMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Check if request body is gzip-compressed
+		if r.Header.Get("Content-Encoding") == "gzip" {
+			gz, err := gzip.NewReader(r.Body)
+			if err != nil {
+				slog.Error("failed to create gzip reader", "error", err, "path", r.URL.Path)
+				http.Error(w, "Invalid gzip encoding", http.StatusBadRequest)
+				return
+			}
+			defer gz.Close()
+
+			// Replace request body with decompressed reader
+			// The original r.Body will be closed by the gzip reader
+			r.Body = gz
+
+			// Remove Content-Encoding header so handlers don't need to know about compression
+			r.Header.Del("Content-Encoding")
+		}
+
+		// Call the next handler
+		next(w, r)
+	}
+}
+
 // HandleTraces processes incoming OTLP trace data
 func (h *Handler) HandleTraces(w http.ResponseWriter, r *http.Request) {
-	// Read the request body
 	body, err := io.ReadAll(r.Body)
+	defer r.Body.Close()
 	if err != nil {
 		slog.Error("failed to read trace request body", "error", err, "path", r.URL.Path)
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 
 	// Extract org_id from header for multi-tenancy
 	orgID := r.Header.Get("x-org-id")
@@ -80,14 +107,13 @@ func (h *Handler) HandleTraces(w http.ResponseWriter, r *http.Request) {
 
 // HandleMetrics processes incoming OTLP metrics data
 func (h *Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
-	// Read the request body
 	body, err := io.ReadAll(r.Body)
+	defer r.Body.Close()
 	if err != nil {
 		slog.Error("failed to read metrics request body", "error", err, "path", r.URL.Path)
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 
 	// Extract org_id from header
 	orgID := r.Header.Get("x-org-id")

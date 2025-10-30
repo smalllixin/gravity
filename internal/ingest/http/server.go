@@ -51,9 +51,9 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		w.Write([]byte("READY"))
 	})
 
-	// OTLP endpoints
-	router.Post("/v1/traces", handler.HandleTraces)
-	router.Post("/v1/metrics", handler.HandleMetrics)
+	// OTLP endpoints with decompression middleware
+	router.Post("/v1/traces", DecompressionMiddleware(handler.HandleTraces))
+	router.Post("/v1/metrics", DecompressionMiddleware(handler.HandleMetrics))
 
 	httpServer := &http.Server{
 		Addr:         cfg.HTTP.Address,
