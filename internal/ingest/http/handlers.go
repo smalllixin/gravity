@@ -8,9 +8,11 @@ import (
 	"log"
 	"net/http"
 
+	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectortracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/youware/gravity/internal/ingest/filter"
@@ -79,6 +81,13 @@ func (h *Handler) HandleTraces(w http.ResponseWriter, r *http.Request) {
 
 // HandleMetrics processes incoming OTLP metrics data
 func (h *Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
+	// Read the request body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Error reading request body: %v", err)
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
 	defer r.Body.Close()
 
 	// Extract org_id from header
@@ -87,11 +96,41 @@ func (h *Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		orgID = "default"
 	}
 
+	// Decode OTLP metrics protobuf
+	var exportReq collectormetricspb.ExportMetricsServiceRequest
+	if err := proto.Unmarshal(body, &exportReq); err != nil {
+		log.Printf("Error unmarshaling OTLP metrics data: %v", err)
+		http.Error(w, "Invalid OTLP protobuf data", http.StatusBadRequest)
+		return
+	}
+
+	// Convert to JSON for readable logging
+	marshaler := protojson.MarshalOptions{
+		Multiline:       true,
+		Indent:          "  ",
+		EmitUnpopulated: false,
+	}
+	jsonData, err := marshaler.Marshal(&exportReq)
+	if err != nil {
+		log.Printf("Error converting metrics to JSON: %v", err)
+	} else {
+		log.Printf("Received OTLP Metrics (org_id=%s):\n%s", orgID, string(jsonData))
+	}
+
+	// Count metrics for summary
+	metricsCount := 0
+	for _, rm := range exportReq.GetResourceMetrics() {
+		for _, sm := range rm.GetScopeMetrics() {
+			metricsCount += len(sm.GetMetrics())
+		}
+	}
+
 	// Acknowledge receipt
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "accepted",
-		"org_id": orgID,
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":        "accepted",
+		"metrics_count": metricsCount,
+		"org_id":        orgID,
 	})
 }
 
