@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/lmittmann/tint"
 
 	"github.com/youware/gravity/internal/ingest/http"
 	"github.com/youware/gravity/internal/shared/config"
@@ -17,22 +19,32 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	handler := tint.NewHandler(os.Stdout, &tint.Options{
+		Level:      slog.LevelInfo,
+		TimeFormat: time.RFC3339,
+		AddSource:  true,
+	})
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		logger.Error("failed to load config", "error", err)
+		os.Exit(1)
 	}
 
 	// Create HTTP server
 	srv, err := http.NewServer(cfg)
 	if err != nil {
-		log.Fatalf("failed to create server: %v", err)
+		logger.Error("failed to create server", "error", err)
+		os.Exit(1)
 	}
 
 	// Start server in a goroutine
 	errChan := make(chan error, 1)
 	go func() {
-		log.Printf("Starting ingest HTTP server on %s", cfg.HTTP.Address)
+		logger.Info("starting ingest HTTP server", "address", cfg.HTTP.Address)
 		if err := srv.Start(); err != nil {
 			errChan <- fmt.Errorf("server error: %w", err)
 		}
@@ -44,19 +56,19 @@ func main() {
 
 	select {
 	case err := <-errChan:
-		log.Printf("Server error: %v", err)
+		logger.Error("server error", "error", err)
 	case sig := <-sigChan:
-		log.Printf("Received signal: %v", sig)
+		logger.Info("received signal", "signal", sig)
 	}
 
 	// Graceful shutdown
-	log.Println("Shutting down server...")
+	logger.Info("shutting down server")
 	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer shutdownCancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Error during shutdown: %v", err)
+		logger.Error("error during shutdown", "error", err)
 	}
 
-	log.Println("Server stopped")
+	logger.Info("server stopped")
 }

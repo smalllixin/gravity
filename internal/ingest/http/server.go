@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -31,7 +32,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	// Middleware stack
 	router.Use(middleware.RequestID)
 	router.Use(middleware.RealIP)
-	router.Use(middleware.Logger)
+	router.Use(requestLogger(slog.Default()))
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Timeout(60 * time.Second))
 
@@ -92,4 +93,34 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+
+			next.ServeHTTP(ww, r)
+
+			status := ww.Status()
+			if status == 0 {
+				status = http.StatusOK
+			}
+
+			args := []any{
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", status,
+				"bytes", ww.BytesWritten(),
+				"duration", time.Since(start),
+			}
+
+			if reqID := middleware.GetReqID(r.Context()); reqID != "" {
+				args = append(args, "request_id", reqID)
+			}
+
+			logger.Info("request completed", args...)
+		})
+	}
 }
