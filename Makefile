@@ -5,6 +5,7 @@ help: ## Show this help
 
 build: ## Build worker binary
 	go build -o bin/worker ./cmd/worker
+	go build -o bin/reconstruct ./cmd/reconstruct
 
 test: ## Run tests
 	go test -v ./...
@@ -14,6 +15,9 @@ dev: build ## Start dev environment and run worker
 
 inspect: ## Inspect compression results
 	@./scripts/inspect.sh
+
+reconstruct: ## Reconstruct content from trace ID (usage: make reconstruct TRACE_ID=xxx)
+	@./scripts/reconstruct.sh $(TRACE_ID)
 
 stop: ## Stop dev environment
 	cd dev && docker-compose down

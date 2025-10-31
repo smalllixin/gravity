@@ -1,4 +1,8 @@
-# OTel → Prompt‑DAG Data Flow (Visual)
+# OTel → Prompt‑DAG Data Flow (Architecture Vision)
+
+> **📘 Note**: This document describes the **future architecture and design goals** for Gravity. For the current MVP implementation, see [mvp.md](./mvp.md).
+
+---
 
 ## Background & Design Philosophy
 
@@ -35,6 +39,7 @@ This system is designed as an **offline-first, compression-optimized alternative
 ---
 
 ## 1) End‑to‑End Flow
+
 ```mermaid
 flowchart LR
   A[LiteLLM Proxy
@@ -45,7 +50,7 @@ flowchart LR
   raw spans| C[(S3: raw-spans/
   {org}/{date}/batch.json.gz)]
   C -->|S3 event notification
-  → SQS or scheduled| D[Compression Worker
+  → SQS| D[Compression Worker
   (tokenize → chunk → hash → zstd)]
   D -->|PUT if-missing| E[(S3: blobs/
   content-addressed)]
@@ -58,6 +63,14 @@ flowchart LR
   E --> H
   C -.->|lifecycle: 30d TTL| I[Auto-cleanup]
 ```
+
+**Key components:**
+- **S3 event notifications → SQS** for instant processing (no polling delay)
+- **Tokenization** (tiktoken) for token-level chunking and better deduplication
+- **Zstd compression** with per-model dictionaries for optimal compression ratios
+- **Parquet/ClickHouse** for fast, queryable indexes with predicates
+- **Reconstruction tool** for lossless prompt recovery from blobs
+- **Multi-tenant** org_id-based partitioning and isolation
 
 ---
 
@@ -105,7 +118,7 @@ s3://bucket/raw-spans/{org_id}/dt={YYYY-MM-DD}/hour={HH}/batch-{timestamp}.json.
 
 ### S3 → Worker Trigger Mechanisms
 
-**Option A: S3 Event Notifications → SQS** (Recommended)
+**S3 Event Notifications → SQS** (Production Architecture)
 ```
 S3 PutObject event → S3 Event Notification → SQS Queue → Worker polls SQS
 ```
@@ -113,41 +126,54 @@ S3 PutObject event → S3 Event Notification → SQS Queue → Worker polls SQS
 - Natural backpressure (workers process at their own pace)
 - At-least-once delivery (idempotent processing required)
 - Auto-scaling based on SQS queue depth
+- Near-instant processing (millisecond latency)
+- No polling overhead or delays
 
-**Option B: Scheduled Batch Processing**
-```bash
-# Cron job every 5-15 minutes
-aws s3 ls s3://bucket/raw-spans/*/dt=$(date +%Y-%m-%d)/ \
-  --recursive | filter-unprocessed | xargs worker-process
+### Worker Core Logic
+
+The compression pipeline implements token-level deduplication:
+
+- **Tokenize** with same tokenizer as model (e.g., `o200k_base` for GPT-4)
+- **Chunk** by token boundaries (e.g., 1024 or 2048 token chunks)
+- **Hash** each chunk: `blake3(token_bytes)` → content-addressed storage
+- **Compress**: `zstd` with model-specific dictionaries for optimal compression
+- **Idempotent write**: `HEAD` → `PUT` to S3 only if blob missing
+- **Emit** structured index with:
+  - Ordered `node_ids[]` for reconstruction
+  - `completion_ref` hash for model outputs
+  - `frame_recipe` metadata for structured recovery
+
+### S3 Object Keys (Production Layout)
+
 ```
-- Simpler setup, slightly higher latency
-- Good for initial MVP or low-volume scenarios
-
-### Worker (Core Logic)
-- **Tokenize** with same tokenizer as model (e.g., `o200k_base`)
-- **Chunk** by tokens (e.g., 1024/2048)
-- **Hash** each chunk: `blake3(token_bytes)`
-- **Compress**: `zstd` (dict per `{org, model}`)
-- **Idempotent write**: `HEAD` → `PUT` to S3 only if missing
-- **Emit** index row with ordered `node_ids[]`, `completion_ref`
-
-### S3 Object Keys (Content‑Addressed, Long‑Term Source of Truth)
-```
-blobs/blake3/{org_id}/{hash[0:2]}/{hash}.zst        # prompt chunks
+blobs/blake3/{org_id}/{hash[0:2]}/{hash}.zst        # prompt chunks (zstd)
 completions/{org_id}/{hash[0:2]}/{hash}.zst         # model completions (optional)
+indexes/{org_id}/dt={date}/{trace_id}.parquet       # structured Parquet indexes
 ```
 
-### Parquet / ClickHouse (Indexes & Events)
+**Benefits:**
+- Multi-tenant isolation via `org_id` prefix
+- Efficient date-based partitioning
+- Zstd compression with org/model-specific dictionaries
+- Parquet enables fast predicate pushdown queries
+
+### Index Format (Parquet / ClickHouse)
+
+Structured indexes enable fast queries and lossless reconstruction:
+
 ```json
 {
   "trace_id": "abcd-1234",
   "span_id": "efgh-5678",
+  "org_id": "acme",
+  "model": "gpt-4o",
   "node_ids": ["hA","hB","hC"],
   "completion_ref": "hZ",
   "prompt_tokens": 187,
   "completion_tokens": 23,
   "latency_ms": 642,
   "cache_hit_ratio": 0.0,
+  "timestamp": "2025-10-31T19:00:00Z",
   "frame_recipe": {
     "serializer": "openai_messages_v1",
     "tokenizer": "o200k_base",
@@ -160,9 +186,16 @@ completions/{org_id}/{hash[0:2]}/{hash}.zst         # model completions (optiona
 }
 ```
 
+**Query capabilities:**
+- Filter by org_id, model, date range, token count
+- Aggregate metrics (avg latency, cache hit rates, token usage)
+- Search for specific prompt patterns via hash lookups
+- Time-series analysis with Parquet partitioning
+
 ---
 
-## 3) Reconstruction Path (Lossless)
+## 3) Reconstruction Path (Lossless Recovery)
+
 ```mermaid
 sequenceDiagram
   participant UI as Analyst/Tool
@@ -180,10 +213,12 @@ sequenceDiagram
   UI->>UI: concat by frame_recipe → full prompt
 ```
 
-**Properties**
-- Tokenizer is lossless → exact text recovery
-- Content‑addressed chunks → global dedupe
-- No long‑term full JSON copies → storage minimized
+**Key properties:**
+- **Lossless**: Tokenizer decode is deterministic → exact text recovery
+- **Efficient**: Content-addressed chunks → global deduplication
+- **Minimal storage**: No redundant full JSON copies → only blobs + indexes
+- **Queryable**: Parquet/ClickHouse indexes enable fast filtering
+- **Scalable**: Reconstruction parallelizable across traces
 
 ---
 

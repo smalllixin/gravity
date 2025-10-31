@@ -32,8 +32,10 @@ func New(cfg *Config) (*Worker, error) {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	// Create S3 client
-	s3Client := s3.NewFromConfig(awsCfg)
+	// Create S3 client with path-style addressing for MinIO compatibility
+	s3Client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.UsePathStyle = true
+	})
 
 	// Create processor
 	processor := NewProcessor(cfg, s3Client)
