@@ -1,65 +1,84 @@
 # Gravity - Prompt-DAG Observability System
 
-## Project Structure
+Offline-first, compression-optimized LLM observability. See `docs/data_flow.md` for architecture.
 
-```
-gravity/
-├── cmd/
-│   ├── ingest-http/           # OTLP/HTTP ingestion service (collector target, planned)
-│   ├── prompt-worker/         # Compression/deduplication worker
-│   ├── reconstructor/         # Prompt rehydration CLI (node_ids → S3 → decode)
-│   └── admin-cli/             # Admin tooling for backfills, repairs
-│
-├── internal/
-│   ├── ingest/                # OTLP/HTTP decoding → envelope batching
-│   │   ├── http/              # `/v1/traces` + `/v1/metrics` handlers
-│   │   └── pipeline/          # Batching, queue sinks, retries
-│   │
-│   ├── worker/                # Worker components
-│   │   ├── processor/         # Normalize → tokenize → chunk → hash
-│   │   ├── storage/           # Blob uploader (S3/MinIO) + idempotent logic
-│   │   ├── indexer/           # Postgres/ClickHouse PromptNode graph updates
-│   │   ├── metrics/           # Trace metric derivation + OTLP feedback
-│   │   └── wal/               # Optional short-ttl raw envelope WAL (planned)
-│   │
-│   ├── dag/                   # Core Prompt-DAG domain logic (isolated)
-│   │   ├── node.go            # PromptNode model
-│   │   ├── edge.go            # DAG edges
-│   │   └── builder.go         # Build/merge DAG
-│   │
-│   ├── queue/                 # Queue abstraction layer (explicit interfaces)
-│   │   ├── queue.go           # Consumer/Producer interfaces
-│   │   ├── kafka/             # Kafka implementation
-│   │   └── sqs/               # AWS SQS implementation
-│   │
-│   ├── shared/                # Cross-cutting concerns
-│   │   ├── config/            # Config loading/validation
-│   │   ├── logging/           # Structured logging
-│   │   └── observability/     # Tracing, metrics instrumentation
-│   │
-│   └── backfill/              # Backfill routines (CLI/cron)
-│
-├── pkg/
-│   └── promptdag/             # Stable public library (schemas, client)
-│
-├── db/migrations/             # Database migrations
-├── analytics/                 # Offline analytics queries, notebooks (planned)
-├── scripts/                   # Build, dev, and test scripts
-│   ├── localstack.sh
-│   └── bench.sh
-├── deploy/                    # Deployment configurations
-│   ├── docker/
-│   ├── k8s/
-│   └── terraform/
-├── test/
-│   ├── integration/           # End-to-end tests
-│   └── load/                  # Performance tests
-├── docs/contracts/            # Data contracts for envelopes, frames, indexes
-└── docs/runbooks/             # Operational playbooks
+## Quick Start
+
+```bash
+# Start dev environment and run compression worker
+make dev
+
+# Or manually:
+make build           # Build worker binary
+cd dev && docker-compose up -d  # Start MinIO, LiteLLM, OTel Collector
+./scripts/dev.sh     # Run worker
+
+# Inspect results
+make inspect
+
+# Stop everything
+make stop
 ```
 
-## Otel
+## Architecture
 
-- Configure the OTel Collector with OTLP/HTTP exporters pointing to the Gravity ingest service (`POST /v1/traces` / `/v1/metrics`); the service converts spans to envelopes and pushes them onto the queue.
+```
+LiteLLM → OTel Collector → MinIO (raw-spans/) → Worker → MinIO (blobs/ + indexes/)
+          ↓                 ↓                     ↓
+       Jaeger        OTLP JSON (gzip)    Content-addressed (BLAKE3 + gzip)
+```
 
-- span spec /Users/lixin/code/temp/gateway/openinference/spec
+**Compression Worker:**
+1. Poll `s3://traces/raw-spans/` every 10s
+2. Parse OTLP JSON → extract prompt content
+3. Chunk (newlines) → hash (BLAKE3) → compress (gzip)
+4. Store deduplicated blobs: `s3://traces/blobs/{hash}.gz`
+5. Store indexes: `s3://traces/indexes/{trace_id}.json`
+
+**Dev Stack** (`dev/`):
+- MinIO (S3): http://localhost:9000 (console: 9001)
+- LiteLLM Proxy: http://localhost:4000
+- Jaeger UI: http://localhost:16686
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3001
+
+## Configuration
+
+Worker environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `S3_BUCKET` | *required* | S3 bucket name |
+| `S3_REGION` | `us-west-2` | AWS region |
+| `POLL_INTERVAL` | `30s` | Polling frequency |
+
+Full config: `internal/worker/config.go`
+
+## Output
+
+**Blobs**: `s3://bucket/blobs/{hash[0:2]}/{hash}.gz`
+Content-addressed chunks (BLAKE3 hash, gzip compressed)
+
+**Indexes**: `s3://bucket/indexes/{trace_id}.json`
+```json
+{
+  "trace_id": "...",
+  "span_id": "...",
+  "hashes": ["hash1", "hash2", "hash3"]
+}
+```
+
+## Roadmap
+
+**MVP ✅**
+- [x] OTLP parsing and content extraction
+- [x] Newline-based chunking
+- [x] BLAKE3 hashing + gzip compression
+- [x] S3 storage with idempotency
+
+**Next**
+1. Tokenization (tiktoken/o200k_base)
+2. Zstd compression with dictionaries
+3. S3 event triggers (SQS)
+4. Reconstruction tool
+5. Prometheus metrics
