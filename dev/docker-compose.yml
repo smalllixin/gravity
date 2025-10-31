@@ -19,9 +19,14 @@ services:
       - minio
     entrypoint: ["/bin/sh", "-c"]
     command: >-
-      "mc alias set local http://minio:9000 minioadmin minioadmin &&
+      "sleep 5 &&
+      until mc alias set local http://minio:9000 minioadmin minioadmin; do
+        echo 'Waiting for MinIO...';
+        sleep 2;
+      done &&
       mc mb -p local/traces || true &&
-      mc ls local/traces"
+      echo 'Bucket created successfully' &&
+      mc ls local/"
   litellm:
     build:
       context: .
