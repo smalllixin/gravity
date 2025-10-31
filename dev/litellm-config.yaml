@@ -1,0 +1,64 @@
+litellm_settings:
+  request_timeout: 6000    # raise Timeout error if call takes longer than 600 seconds. Default value is 6000seconds if not set
+  set_verbose: false      # Switch off Debug Logging, ensure your logs do not have any debugging on
+  json_logs: true         # Get debug logs in json format
+  # success_callback: ["langfuse"]
+  # failure_callback: ["langfuse"]
+  turn_off_message_logging: false   # 是否关闭消息和响应日志记录
+  redact_user_api_key_info: true  # 是否在日志中隐藏用户 API 密钥信息
+  num_retries: 3
+  allowed_fails: 3
+  cooldown_time: 10
+  # callbacks: ["otel"]  # Standard OTEL (commented out)
+  # callback_settings:
+  #   otel:
+  #     message_logging: true
+  callbacks: ["custom_callbacks.proxy_handler_instance", "openinference_otel.openinference_logger"]  # Custom callbacks first for routing, then OpenInference OTEL logger
+  # Caching settings
+  cache: false
+        # 缓存生存时间（秒）
+  # model_group_settings:
+  #   forward_client_headers_to_llm_api:
+  #     - glm-4.5-cn
+  #     - glm-4.5v-cn
+  #     - glm-4.5-x-cn
+  #     - glm-4.5-airx-cn
+  #     - glm-4.5-air-cn
+  #     - glm-4.5
+general_settings:
+  # master_key: sk-1234      # enter your own master key, ensure it starts with 'sk-'
+  proxy_batch_write_at: 60 # Batch write spend updates every 60s
+  database_connection_pool_limit: 10 # limit the number of database connections to = MAX Number of DB Connections/Number of instances of litellm proxy (Around 10-20 is good number)
+  # OPTIONAL Best Practices
+  disable_spend_logs: true # turn off writing each transaction to the db. We recommend doing this is you don't need to see Usage on the LiteLLM UI and are tracking metrics via Prometheus
+  disable_error_logs: false # turn off writing LLM Exceptions to DB
+  allow_requests_on_db_unavailable: true # Only USE when running LiteLLM on your VPC. Allow requests to still be processed even if the DB is unavailable. We recommend doing this if you're running LiteLLM on VPC that cannot be accessed from the public internet.
+  # store_model_in_db: true
+  store_prompts_in_spend_logs: true
+  use_redis_transaction_buffer: false
+model_list:
+  - model_name: azure/gpt-5-codex
+    litellm_params:
+      model: azure/gpt-5-codex
+      api_base: https://youware-gpt-5-resource.services.ai.azure.com # runs os.getenv("AZURE_API_BASE")
+      api_key: write_key_here # runs os.getenv("AZURE_API_KEY")
+      api_version: "2025-03-01-preview"
+      base_model: azure/gpt-5-codex
+  - model_name: azure/gpt-5-codex
+    litellm_params:
+      model: azure/gpt-5-codex
+      api_base: https://ops12-mf6nh6mi-swedencentral.openai.azure.com # runs os.getenv("AZURE_API_BASE")
+      api_key: write_key_here # runs os.getenv("AZURE_API_KEY")
+      api_version: "2025-03-01-preview"
+      base_model: azure/gpt-5-codex
+  - model_name: glm-4.6 
+    litellm_params:
+      model: openai/glm-4.6   
+      api_base: https://api.z.ai/api/paas/v4/
+      api_key: write_key_here
+      base_model: glm-4.6
+  - model_name: claude-4-5-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: write_key_here
+      base_model: claude-4-5-sonnet

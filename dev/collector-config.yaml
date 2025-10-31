@@ -1,0 +1,106 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 100000
+    expected_new_traces_per_sec: 100
+    policies:
+      [
+        {
+          name: keep-litellm-request-traces,
+          type: ottl_condition,
+          ottl_condition: {
+            error_mode: ignore,
+            span: [
+              'resource.attributes["service.name"] == "litellm" and (name == "litellm_request" or name == "raw_gen_ai_request")'
+            ]
+          }
+        }
+      ]
+
+  # Batch processor for S3 only (larger batches = fewer files)
+  batch/s3:
+    # timeout: 120s           # Write to S3 every 2 minutes
+    timeout: 10s          # for local testing
+    send_batch_size: 1000   # Or when 1000 spans accumulated
+    send_batch_max_size: 2000
+
+exporters:
+  # Debug exporter (console output) - set to normal to reduce noise
+  debug:
+    verbosity: normal
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+  # Jaeger exporter for traces
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # Prometheus exporter for metrics
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: litellm
+
+  # Loki exporter for logs via OTLP HTTP
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+
+  # Gravity exporter for Prompt-DAG processing
+  otlphttp/gravity:
+    endpoint: http://host.docker.internal:8080
+    encoding: proto
+    headers:
+      x-org-id: default
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+
+  # S3 exporter (writes OTLP JSON batches to S3/MinIO)
+  awss3:
+    s3uploader:
+      region: us-east-1
+      s3_bucket: traces
+      s3_prefix: raw-spans
+      s3_partition_format: "dt=%Y-%m-%d/hour=%H"
+      file_prefix: "batch-"
+      endpoint: http://minio:9000
+      s3_force_path_style: true
+      disable_ssl: true
+      compression: gzip
+    marshaler: otlp_json
+
+service:
+  pipelines:
+    # Real-time traces pipeline (no batching - instant export)
+    traces/realtime:
+      receivers: [otlp]
+      processors: [tail_sampling]
+      exporters: [debug, otlp/jaeger, otlphttp/gravity]
+
+    # S3 traces pipeline (with batching - fewer, larger files)
+    traces/s3:
+      receivers: [otlp]
+      processors: [tail_sampling, batch/s3]
+      exporters: [awss3]
+
+    # Metrics and logs unchanged
+    metrics:
+      receivers: [otlp]
+      exporters: [debug, prometheus, otlphttp/gravity]
+    logs:
+      receivers: [otlp]
+      exporters: [debug, otlphttp/loki]
