@@ -57,17 +57,17 @@ exporters:
       insecure: true
 
   # Gravity exporter for Prompt-DAG processing
-  otlphttp/gravity:
-    endpoint: http://host.docker.internal:8080
-    encoding: proto
-    headers:
-      x-org-id: default
-    tls:
-      insecure: true
-    retry_on_failure:
-      enabled: true
-      initial_interval: 1s
-      max_interval: 30s
+  # otlphttp/gravity:
+  #   endpoint: http://host.docker.internal:8080
+  #   encoding: proto
+  #   headers:
+  #     x-org-id: default
+  #   tls:
+  #     insecure: true
+  #   retry_on_failure:
+  #     enabled: true
+  #     initial_interval: 1s
+  #     max_interval: 30s
 
   # S3 exporter (writes OTLP JSON batches to S3/MinIO)
   awss3:
@@ -89,7 +89,7 @@ service:
     traces/realtime:
       receivers: [otlp]
       processors: [tail_sampling]
-      exporters: [debug, otlp/jaeger, otlphttp/gravity]
+      exporters: [debug, otlp/jaeger]  # otlphttp/gravity
 
     # S3 traces pipeline (with batching - fewer, larger files)
     traces/s3:
@@ -100,7 +100,7 @@ service:
     # Metrics and logs unchanged
     metrics:
       receivers: [otlp]
-      exporters: [debug, prometheus, otlphttp/gravity]
+      exporters: [debug, prometheus]  # otlphttp/gravity
     logs:
       receivers: [otlp]
       exporters: [debug, otlphttp/loki]
